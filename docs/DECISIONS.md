@@ -51,7 +51,10 @@ If both roles shared an endpoint or audience, a compromised or misconfigured cli
 ### Decision
 Complete separation of endpoints, processes, and OAuth audiences:
 1. **Separate Endpoints:** Citizen tools are served strictly at `/mcp/citizen`; officer tools are served strictly at `/mcp/officer`.
-2. **Distinct Resource Audiences (RFC 8707):** Tokens minted for citizens have `aud = ${PUBLIC_BASE_URL}/mcp/citizen` and scope `citizen`. Tokens minted for officers have `aud = ${PUBLIC_BASE_URL}/mcp/officer` and scope `officer`.
+2. **Canonical Resource URLs & Required `aud` Claims:**
+   - Citizen MCP Resource URL: `${PUBLIC_BASE_URL}/mcp/citizen`
+   - Officer MCP Resource URL: `${PUBLIC_BASE_URL}/mcp/officer`
+   These are the **exact** canonical audience (`aud`) strings that the Phase 4 MCP resource servers MUST require when verifying incoming OAuth 2.1 access tokens. Any token with an `aud` that does not match this server's exact canonical URL is rejected with HTTP 401.
 3. **Strict Resource Server Rejection:**
    - A citizen token presented to `/mcp/officer` returns HTTP 401/403.
    - An officer token presented to `/mcp/citizen` returns HTTP 401/403.

@@ -19,7 +19,7 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me-before-deploying}
       # the address at which people reach this portal; stamped into sign-in tokens and
       # discovery documents, so it must be the public one when deployed
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8000}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
       AGENT_INTERNAL_KEY: ${AGENT_INTERNAL_KEY:-dev-agent-key-sewasetu-2026}
       AGENT_ENABLED_BLOCKS: ${AGENT_ENABLED_BLOCKS:-Sonari}
     depends_on:
@@ -28,6 +28,19 @@ services:
     volumes:
       - uploads:/var/sewasetu/uploads
       - applogs:/var/log/sewasetu
+
+  proxy:
+    image: caddy:2
+    ports:
+      - "8080:80"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
 
   scheduler:
     build: ./app
@@ -50,3 +63,5 @@ volumes:
   pgdata:
   uploads:
   applogs:
+  caddy_data:
+  caddy_config:

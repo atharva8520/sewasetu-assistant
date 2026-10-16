@@ -1,0 +1,51 @@
+{$SITE_ADDRESS::80} {
+    # Limit request bodies to 6MB (portal allows up to 5MB file uploads)
+    request_body {
+        max_size 6MB
+    }
+
+    # Safe response headers (preserves portal CORS headers on /.well-known/* and /oauth/*)
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+    }
+
+    # Internal agent API must NEVER be accessible from the public proxy
+    handle /internal/* {
+        respond "Not Found" 404
+    }
+
+    # MCP Citizen service and RFC 9728 protected-resource metadata
+    handle /mcp/citizen* {
+        reverse_proxy mcp-citizen:9001 {
+            flush_interval -1
+        }
+    }
+    handle /.well-known/oauth-protected-resource/mcp/citizen* {
+        reverse_proxy mcp-citizen:9001 {
+            flush_interval -1
+        }
+    }
+
+    # MCP Officer service and RFC 9728 protected-resource metadata
+    handle /mcp/officer* {
+        reverse_proxy mcp-officer:9002 {
+            flush_interval -1
+        }
+    }
+    handle /.well-known/oauth-protected-resource/mcp/officer* {
+        reverse_proxy mcp-officer:9002 {
+            flush_interval -1
+        }
+    }
+
+    # Evaluation Dashboard
+    handle /eval-dashboard* {
+        reverse_proxy dashboard:9003
+    }
+
+    # Portal web application and OAuth endpoints
+    handle {
+        reverse_proxy app:8000
+    }
+}

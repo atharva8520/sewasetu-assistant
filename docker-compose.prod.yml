@@ -1,0 +1,19 @@
+services:
+  db:
+    restart: unless-stopped
+
+  app:
+    restart: unless-stopped
+    ports: !reset []
+
+  proxy:
+    restart: unless-stopped
+    ports: !override
+      - "80:80"
+      - "443:443"
+
+  scheduler:
+    restart: unless-stopped
+
+  smsgw:
+    restart: unless-stopped

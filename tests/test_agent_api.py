@@ -13,8 +13,11 @@ import requests
 import pytest
 from datetime import datetime, date, timedelta
 
-BASE_URL = "http://localhost:8000"
-INTERNAL_KEY = "dev-agent-key-sewasetu-2026"
+import os
+
+BASE_URL = os.environ.get("BASE_URL", "http://localhost:8080")
+INTERNAL_BASE_URL = os.environ.get("INTERNAL_BASE_URL", "http://localhost:8000" if ":8080" in BASE_URL else BASE_URL)
+INTERNAL_KEY = os.environ.get("AGENT_INTERNAL_KEY", "dev-agent-key-sewasetu-2026")
 INTERNAL_HEADERS = {"X-Internal-Key": INTERNAL_KEY}
 
 
@@ -230,7 +233,7 @@ def test_parity_200_cases():
 
         # Query internal agent API
         resp = requests.post(
-            f"{BASE_URL}/internal/agent/validate",
+            f"{INTERNAL_BASE_URL}/internal/agent/validate",
             headers=INTERNAL_HEADERS,
             json={"data": c, "doc_path": doc},
             timeout=5
@@ -259,7 +262,7 @@ def test_agent_application_in_admin():
     }
 
     # 1. PUT draft
-    r_draft = requests.put(f"{BASE_URL}/internal/agent/draft", headers=cit_headers, json={
+    r_draft = requests.put(f"{INTERNAL_BASE_URL}/internal/agent/draft", headers=cit_headers, json={
         "applicant_name": "Agent Created Citizen",
         "dob": "10/10/1950",
         "gender": "Male",
@@ -273,7 +276,7 @@ def test_agent_application_in_admin():
     assert r_draft.status_code == 200
 
     # 2. Upload link & upload doc
-    r_link = requests.post(f"{BASE_URL}/internal/agent/upload-link", headers=cit_headers)
+    r_link = requests.post(f"{INTERNAL_BASE_URL}/internal/agent/upload-link", headers=cit_headers)
     assert r_link.status_code == 200
     upload_url = r_link.json()["upload_url"]
 
@@ -282,13 +285,13 @@ def test_agent_application_in_admin():
     assert r_up.status_code == 200
 
     # 3. Review
-    r_rev = requests.post(f"{BASE_URL}/internal/agent/review", headers=cit_headers)
+    r_rev = requests.post(f"{INTERNAL_BASE_URL}/internal/agent/review", headers=cit_headers)
     assert r_rev.status_code == 200
     review_code = r_rev.json()["review_code"]
     assert review_code
 
     # 4. Submit
-    r_sub = requests.post(f"{BASE_URL}/internal/agent/submit", headers=cit_headers, json={"review_code": review_code})
+    r_sub = requests.post(f"{INTERNAL_BASE_URL}/internal/agent/submit", headers=cit_headers, json={"review_code": review_code})
     assert r_sub.status_code == 200
     app_no = r_sub.json()["application_no"]
     app_id = r_sub.json()["application_id"]
@@ -313,19 +316,19 @@ def test_agent_application_in_admin():
 def test_internal_key_security():
     """All /internal/agent routes require correct X-Internal-Key."""
     routes = [
-        ("GET", f"{BASE_URL}/internal/agent/scheme"),
-        ("POST", f"{BASE_URL}/internal/agent/eligibility"),
-        ("GET", f"{BASE_URL}/internal/agent/draft"),
-        ("PUT", f"{BASE_URL}/internal/agent/draft"),
-        ("POST", f"{BASE_URL}/internal/agent/upload-link"),
-        ("POST", f"{BASE_URL}/internal/agent/review"),
-        ("POST", f"{BASE_URL}/internal/agent/submit"),
-        ("GET", f"{BASE_URL}/internal/agent/my-application"),
-        ("POST", f"{BASE_URL}/internal/agent/withdraw"),
-        ("GET", f"{BASE_URL}/internal/agent/queue"),
-        ("GET", f"{BASE_URL}/internal/agent/case/SSP26000000"),
-        ("POST", f"{BASE_URL}/internal/agent/decide"),
-        ("GET", f"{BASE_URL}/internal/agent/summary")
+        ("GET", f"{INTERNAL_BASE_URL}/internal/agent/scheme"),
+        ("POST", f"{INTERNAL_BASE_URL}/internal/agent/eligibility"),
+        ("GET", f"{INTERNAL_BASE_URL}/internal/agent/draft"),
+        ("PUT", f"{INTERNAL_BASE_URL}/internal/agent/draft"),
+        ("POST", f"{INTERNAL_BASE_URL}/internal/agent/upload-link"),
+        ("POST", f"{INTERNAL_BASE_URL}/internal/agent/review"),
+        ("POST", f"{INTERNAL_BASE_URL}/internal/agent/submit"),
+        ("GET", f"{INTERNAL_BASE_URL}/internal/agent/my-application"),
+        ("POST", f"{INTERNAL_BASE_URL}/internal/agent/withdraw"),
+        ("GET", f"{INTERNAL_BASE_URL}/internal/agent/queue"),
+        ("GET", f"{INTERNAL_BASE_URL}/internal/agent/case/SSP26000000"),
+        ("POST", f"{INTERNAL_BASE_URL}/internal/agent/decide"),
+        ("GET", f"{INTERNAL_BASE_URL}/internal/agent/summary")
     ]
 
     for method, url in routes:
@@ -351,7 +354,7 @@ def test_subject_isolation():
     headers_b = {"X-Internal-Key": INTERNAL_KEY, "X-Subject": f"citizen:{mob_b}", "X-Client": "test"}
 
     # Citizen A submits application
-    requests.put(f"{BASE_URL}/internal/agent/draft", headers=headers_a, json={
+    requests.put(f"{INTERNAL_BASE_URL}/internal/agent/draft", headers=headers_a, json={
         "applicant_name": "Citizen A",
         "dob": "01/01/1950",
         "village": "Sonari A",
@@ -359,25 +362,25 @@ def test_subject_isolation():
         "bank_account": "111122223333",
         "ifsc": "SBIN0003077"
     })
-    r_link = requests.post(f"{BASE_URL}/internal/agent/upload-link", headers=headers_a)
+    r_link = requests.post(f"{INTERNAL_BASE_URL}/internal/agent/upload-link", headers=headers_a)
     requests.post(r_link.json()["upload_url"], files={"document": ("proof.pdf", b"%PDF dummy", "application/pdf")})
-    r_rev = requests.post(f"{BASE_URL}/internal/agent/review", headers=headers_a)
-    r_sub = requests.post(f"{BASE_URL}/internal/agent/submit", headers=headers_a, json={"review_code": r_rev.json()["review_code"]})
+    r_rev = requests.post(f"{INTERNAL_BASE_URL}/internal/agent/review", headers=headers_a)
+    r_sub = requests.post(f"{INTERNAL_BASE_URL}/internal/agent/submit", headers=headers_a, json={"review_code": r_rev.json()["review_code"]})
     assert r_sub.status_code == 200
     app_no_a = r_sub.json()["application_no"]
 
     # Citizen B queries my-application -> should NOT see Citizen A's application
-    r_b_app = requests.get(f"{BASE_URL}/internal/agent/my-application", headers=headers_b)
+    r_b_app = requests.get(f"{INTERNAL_BASE_URL}/internal/agent/my-application", headers=headers_b)
     assert r_b_app.status_code == 200
     assert r_b_app.json()["has_application"] is False
 
     # Citizen B attempts withdraw -> cannot withdraw Citizen A's application
-    r_b_with = requests.post(f"{BASE_URL}/internal/agent/withdraw", headers=headers_b, json={"confirm": True})
+    r_b_with = requests.post(f"{INTERNAL_BASE_URL}/internal/agent/withdraw", headers=headers_b, json={"confirm": True})
     assert r_b_with.status_code == 400
     assert "Only a pending application can be withdrawn" in r_b_with.json()["error"]
 
     # Citizen A's application remains active
-    r_a_app = requests.get(f"{BASE_URL}/internal/agent/my-application", headers=headers_a)
+    r_a_app = requests.get(f"{INTERNAL_BASE_URL}/internal/agent/my-application", headers=headers_a)
     assert r_a_app.status_code == 200
     assert r_a_app.json()["application"]["application_no"] == app_no_a
     assert r_a_app.json()["application"]["status"] == "PENDING"
@@ -392,7 +395,7 @@ def test_review_code_and_upload_token_security():
     mobile = f"900{secrets.randbelow(9000000) + 1000000}"
     headers = {"X-Internal-Key": INTERNAL_KEY, "X-Subject": f"citizen:{mobile}", "X-Client": "test"}
 
-    requests.put(f"{BASE_URL}/internal/agent/draft", headers=headers, json={
+    requests.put(f"{INTERNAL_BASE_URL}/internal/agent/draft", headers=headers, json={
         "applicant_name": "Tamper Test",
         "dob": "10/10/1950",
         "village": "Village",
@@ -402,7 +405,7 @@ def test_review_code_and_upload_token_security():
     })
 
     # Upload doc
-    r_link = requests.post(f"{BASE_URL}/internal/agent/upload-link", headers=headers)
+    r_link = requests.post(f"{INTERNAL_BASE_URL}/internal/agent/upload-link", headers=headers)
     upload_url = r_link.json()["upload_url"]
     r_up1 = requests.post(upload_url, files={"document": ("proof.pdf", b"%PDF doc", "application/pdf")})
     assert r_up1.status_code == 200
@@ -412,15 +415,15 @@ def test_review_code_and_upload_token_security():
     assert r_up2.status_code == 400
 
     # Generate review code
-    r_rev = requests.post(f"{BASE_URL}/internal/agent/review", headers=headers)
+    r_rev = requests.post(f"{INTERNAL_BASE_URL}/internal/agent/review", headers=headers)
     assert r_rev.status_code == 200
     code = r_rev.json()["review_code"]
 
     # Modify draft AFTER review code generated
-    requests.put(f"{BASE_URL}/internal/agent/draft", headers=headers, json={"village": "Tampered Village"})
+    requests.put(f"{INTERNAL_BASE_URL}/internal/agent/draft", headers=headers, json={"village": "Tampered Village"})
 
     # Attempt submit with earlier review code -> must fail
-    r_sub = requests.post(f"{BASE_URL}/internal/agent/submit", headers=headers, json={"review_code": code})
+    r_sub = requests.post(f"{INTERNAL_BASE_URL}/internal/agent/submit", headers=headers, json={"review_code": code})
     assert r_sub.status_code == 400
     assert "draft was modified" in r_sub.json()["errors"][0].lower() or "review" in r_sub.json()["errors"][0].lower()
 
@@ -453,7 +456,7 @@ def test_officer_decide_guards():
     }
 
     # 1. Decide without prior case view -> MUST fail
-    r_dec1 = requests.post(f"{BASE_URL}/internal/agent/decide", headers=officer_headers, json={
+    r_dec1 = requests.post(f"{INTERNAL_BASE_URL}/internal/agent/decide", headers=officer_headers, json={
         "application_no": app_no,
         "decision": "approve",
         "reason": "Approving without inspecting case details."
@@ -462,13 +465,13 @@ def test_officer_decide_guards():
     assert "viewed" in r_dec1.json()["error"].lower()
 
     # 2. View case
-    r_view = requests.get(f"{BASE_URL}/internal/agent/case/{app_no}", headers=officer_headers)
+    r_view = requests.get(f"{INTERNAL_BASE_URL}/internal/agent/case/{app_no}", headers=officer_headers)
     assert r_view.status_code == 200
     case_data = r_view.json()
     assert "age_below_60_at_submission" in case_data["flags"]
 
     # 3. Approve under-60 case -> MUST fail due to hard flag
-    r_appr = requests.post(f"{BASE_URL}/internal/agent/decide", headers=officer_headers, json={
+    r_appr = requests.post(f"{INTERNAL_BASE_URL}/internal/agent/decide", headers=officer_headers, json={
         "application_no": app_no,
         "decision": "approve",
         "reason": "Trying to approve an underage applicant anyway."
@@ -478,7 +481,7 @@ def test_officer_decide_guards():
     assert "age_below_60_at_submission" in r_appr.json()["hard_flags"]
 
     # 4. Reject under-60 case -> MUST succeed
-    r_rej = requests.post(f"{BASE_URL}/internal/agent/decide", headers=officer_headers, json={
+    r_rej = requests.post(f"{INTERNAL_BASE_URL}/internal/agent/decide", headers=officer_headers, json={
         "application_no": app_no,
         "decision": "reject",
         "reason": "Rejected: applicant is only 26 years old, minimum age is 60."
@@ -536,7 +539,7 @@ def test_session_live():
     refresh_token = r_token.json()["refresh_token"]
 
     # Query session-live -> must be True
-    r_live1 = requests.get(f"{BASE_URL}/internal/agent/session-live", params={
+    r_live1 = requests.get(f"{INTERNAL_BASE_URL}/internal/agent/session-live", params={
         "sub": f"citizen:{test_mobile}",
         "client_id": client_id,
         "aud": f"{BASE_URL}/mcp/citizen"
@@ -548,7 +551,7 @@ def test_session_live():
     requests.post(f"{BASE_URL}/oauth/revoke", data={"token": refresh_token, "client_id": client_id})
 
     # Query session-live again -> must be False
-    r_live2 = requests.get(f"{BASE_URL}/internal/agent/session-live", params={
+    r_live2 = requests.get(f"{INTERNAL_BASE_URL}/internal/agent/session-live", params={
         "sub": f"citizen:{test_mobile}",
         "client_id": client_id,
         "aud": f"{BASE_URL}/mcp/citizen"
