@@ -99,3 +99,31 @@ Evaluation harnesses test edge cases, deliberate injection attempts, invalid app
 
 ### Alternatives Considered
 * *Running evals on production with a test flag on applications:* Rejected. Risk of data leakage, query skew in administrative dashboards, and accidental deemed approval of test rows.
+
+---
+
+## draft-review-code-commit-protocol
+
+### Context
+Elderly applicants assisted by AI models or third-party operators may have drafts edited mid-conversation or modified without explicit consent. If an assistant could submit a draft without an explicit summary review and confirmation, hallucinated or modified banking information could be submitted to the government.
+
+### Decision
+A cryptographic review-code protocol is enforced in `POST /internal/agent/review` and `POST /internal/agent/submit`:
+1. When `POST /review` is called on a valid draft, the server stores a SHA-256 hash of the complete draft data + document path (`review_hash`) and returns a temporary review code (valid 10 minutes).
+2. The assistant is instructed to read the summary (including masked bank account) to the citizen and receive explicit approval.
+3. `POST /submit` requires the review code. The portal verifies the review code, re-hashes the current draft + document, and asserts that the draft was not modified since review. Any mutation to the draft immediately invalidates prior review codes.
+4. On successful submission, drafts and review codes are purged from `agent_drafts` and `agent_reviews`.
+
+---
+
+## session-liveness-check-via-internal-api
+
+### Context
+OAuth 2.1 access tokens are stateless JWTs signed with RS256. If a citizen at a public kiosk or an officer leaves their workstation and revokes their session via `/oauth/revoke` or the portal's Connected Applications page, the refresh token is marked revoked in `oauth_refresh_tokens`, but the access token remains cryptographically valid for its TTL (20–30 minutes) if verified solely via public JWKS keys.
+
+### Decision
+The portal provides an internal endpoint `GET /internal/agent/session-live?sub=&client_id=&aud=`:
+1. Verifies that a non-revoked, unexpired row exists in `oauth_refresh_tokens` for the given subject, client_id, and resource audience.
+2. The MCP resource servers query this endpoint and cache the result for up to 5 seconds.
+3. If the session is no longer live, the assistant returns HTTP 401 with `WWW-Authenticate`, terminating access immediately upon revocation and ensuring kiosk safety.
+

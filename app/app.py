@@ -23,10 +23,13 @@ def now_ist():
     """The portal's clock is Indian Standard Time regardless of where the server runs."""
     return datetime.now(IST).replace(tzinfo=None)
 
+import sys
+import json
 import requests
 import psycopg2
 from flask import (Flask, request, session, redirect, url_for, render_template,
-                   flash, send_file, abort)
+                   render_template_string, flash, send_file, abort)
+from werkzeug.utils import secure_filename
 from fpdf import FPDF
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -76,6 +79,51 @@ def get_db():
         user=config.get("database", "user"),
         password=config.get("database", "password"),
     )
+
+
+def run_startup_migrations():
+    """Apply startup schema updates idempotently. Log loudly on failure."""
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("ALTER TABLE applications ADD COLUMN IF NOT EXISTS channel VARCHAR(20) DEFAULT 'web';")
+        cur.execute("ALTER TABLE applications ADD COLUMN IF NOT EXISTS channel_client VARCHAR(100);")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS agent_drafts (
+                mobile VARCHAR(15) PRIMARY KEY,
+                data JSONB,
+                doc_path VARCHAR(200),
+                updated_at TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS agent_upload_tokens (
+                token_hash VARCHAR(64) PRIMARY KEY,
+                mobile VARCHAR(15),
+                expires_at TIMESTAMP,
+                used_at TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS agent_reviews (
+                mobile VARCHAR(15) PRIMARY KEY,
+                review_hash VARCHAR(64),
+                review_code_hash VARCHAR(64),
+                created_at TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS agent_case_views (
+                id SERIAL PRIMARY KEY,
+                officer VARCHAR(100),
+                application_id INTEGER,
+                viewed_at TIMESTAMP
+            );
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+        app.logger.info("Startup migrations completed successfully.")
+    except Exception as e:
+        app.logger.error("Startup migration failed: %s" % e, exc_info=True)
+        print("CRITICAL: Startup migration failed: %s" % e, file=sys.stderr)
+
+
+run_startup_migrations()
 
 
 def sanitize(value, maxlen=100):
@@ -185,7 +233,7 @@ def active_application(cur, mobile):
     return cur.fetchone()
 
 
-def create_application(cur, mobile, cleaned):
+def create_application(cur, mobile, cleaned, channel="web", client_name=None):
     """Insert a validated application; ensure the status-portal account exists.
 
     The caller commits. Returns (id, application_no).
@@ -195,13 +243,13 @@ def create_application(cur, mobile, cleaned):
         """INSERT INTO applications
            (application_no, applicant_name, mobile, dob, gender, marital_status,
             husband_name, husband_employer, village, block, bank_account, ifsc,
-            doc_path, status, submitted_at)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDING',%s)
+            doc_path, status, submitted_at, channel, channel_client)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDING',%s,%s,%s)
            RETURNING id""",
         (app_no, cleaned["applicant_name"], mobile, cleaned["dob"], cleaned["gender"],
          cleaned["marital_status"], cleaned["husband_name"], cleaned["husband_employer"],
          cleaned["village"], cleaned["block"], cleaned["bank_account"], cleaned["ifsc"],
-         cleaned["doc_path"], datetime.now()))
+         cleaned["doc_path"], datetime.now(), channel, client_name))
     new_id = cur.fetchone()[0]
 
     # status portal account; password is DOB as DDMMYYYY per dept. circular
@@ -210,8 +258,59 @@ def create_application(cur, mobile, cleaned):
     if cur.fetchone()[0] == 0:
         cur.execute("INSERT INTO portal_users (mobile, password_hash) VALUES (%s,%s)",
                     (mobile, hash_password(portal_pass)))
-    write_audit(cur, new_id, "SUBMIT", "applicant:%s" % mobile)
+    audit_note = ("via assistant: %s" % client_name) if (channel == "agent" and client_name) else ("via assistant" if channel == "agent" else "")
+    write_audit(cur, new_id, "SUBMIT", "applicant:%s" % mobile, audit_note)
     return new_id, app_no
+
+
+def submit_application_for(mobile, data, doc_path, channel="web", client_name=None):
+    """Unified application submission core used by web and agent channels.
+    validate_application -> active_application check -> create_application -> commit -> SMS.
+    Returns: {ok, errors[], existing:{application_no,status}|None, application_no, application_id}
+    """
+    errors, cleaned = validate_application(data, doc_path)
+    if errors:
+        return {
+            "ok": False,
+            "errors": errors,
+            "existing": None,
+            "application_no": None,
+            "application_id": None,
+        }
+
+    conn = get_db()
+    cur = conn.cursor()
+    existing = active_application(cur, mobile)
+    if existing:
+        cur.close()
+        conn.close()
+        return {
+            "ok": False,
+            "errors": [
+                "Application %s (%s) already exists for this mobile number. A pending "
+                "application can be withdrawn from the status portal if you need to "
+                "apply afresh." % (existing[1], existing[2])
+            ],
+            "existing": {"application_no": existing[1], "status": existing[2]},
+            "application_no": None,
+            "application_id": None,
+        }
+
+    new_id, app_no = create_application(cur, mobile, cleaned, channel=channel, client_name=client_name)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    send_sms(mobile, "Sewa Setu: application %s received. Track at the status portal "
+                     "with mobile no. and password (DOB as DDMMYYYY)." % app_no)
+
+    return {
+        "ok": True,
+        "errors": [],
+        "existing": None,
+        "application_no": app_no,
+        "application_id": new_id,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -373,24 +472,14 @@ def declaration():
 def handle_submission():
     mobile = session.get("verified_mobile")
     data = session.get("form_data", {})
-    errors, cleaned = validate_application(data, session.get("doc_path", ""))
-    if errors:
-        flash("Please correct the following before submitting: " + "; ".join(errors) + ".")
+    doc_path = session.get("doc_path", "")
+    res = submit_application_for(mobile, data, doc_path, channel="web", client_name=None)
+    if not res["ok"]:
+        if res["existing"]:
+            flash(res["errors"][0])
+            return redirect(url_for("index"))
+        flash("Please correct the following before submitting: " + "; ".join(res["errors"]) + ".")
         return redirect(url_for("form_step", step=1))
-
-    conn = get_db()
-    cur = conn.cursor()
-    existing = active_application(cur, mobile)
-    if existing:
-        cur.close(); conn.close()
-        flash("Application %s (%s) already exists for this mobile number. A pending "
-              "application can be withdrawn from the status portal if you need to "
-              "apply afresh." % (existing[1], existing[2]))
-        return redirect(url_for("index"))
-
-    new_id, app_no = create_application(cur, mobile, cleaned)
-    conn.commit()
-    cur.close(); conn.close()
 
     session.pop("form_data", None)
     session.pop("doc_path", None)
@@ -399,9 +488,7 @@ def handle_submission():
     # see their application and download the acknowledgment without a second login.
     session["logged_in"] = True
     session["portal_mobile"] = mobile
-    send_sms(mobile, "Sewa Setu: application %s received. Track at the status portal "
-                     "with mobile no. and password (DOB as DDMMYYYY)." % app_no)
-    return render_template("confirmation.html", app_no=app_no, app_id=new_id)
+    return render_template("confirmation.html", app_no=res["application_no"], app_id=res["application_id"])
 
 
 def generate_acknowledgment(cur, app_id):
@@ -639,24 +726,61 @@ def admin_view(app_id):
     return render_template("admin_view.html", a=row, app_id=app_id, audit=audit)
 
 
+def decide_application(app_id, new_status, actor, note=""):
+    """Approve or reject a PENDING application, recording who decided and when.
+
+    Returns dict: {"ok": bool, "application_no": str | None, "status": str, "message": str}
+    """
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE applications SET status = %s, decided_at = %s, decided_by = %s "
+        "WHERE id = %s AND status = 'PENDING' RETURNING application_no",
+        (new_status, datetime.now(), actor, app_id),
+    )
+    row = cur.fetchone()
+    if row:
+        audit_actor = actor if ":" in str(actor) else ("admin:%s" % actor)
+        write_audit(cur, app_id, new_status, audit_actor, note)
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {
+            "ok": True,
+            "application_no": row[0],
+            "status": new_status,
+            "message": "Application %s %s." % (row[0], new_status.lower()),
+        }
+    else:
+        cur.execute("SELECT application_no, status FROM applications WHERE id = %s", (app_id,))
+        curr = cur.fetchone()
+        cur.close()
+        conn.close()
+        if curr:
+            return {
+                "ok": False,
+                "application_no": curr[0],
+                "status": curr[1],
+                "message": "Only a pending application can be decided.",
+            }
+        return {
+            "ok": False,
+            "application_no": None,
+            "status": None,
+            "message": "Application not found.",
+        }
+
+
 def _admin_decide(app_id, new_status, note):
     """Approve/reject a PENDING application, recording who decided and when."""
     if not session.get("admin"):
         abort(403)
     actor = session.get("admin_user", ADMIN_USERNAME)
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("UPDATE applications SET status = %s, decided_at = %s, decided_by = %s "
-                "WHERE id = %s AND status = 'PENDING' RETURNING application_no",
-                (new_status, datetime.now(), actor, app_id))
-    row = cur.fetchone()
-    if row:
-        write_audit(cur, app_id, new_status, "admin:%s" % actor, note)
-        conn.commit()
-        flash("Application %s %s." % (row[0], new_status.lower()))
+    res = decide_application(app_id, new_status, actor, note)
+    if res["ok"]:
+        flash(res["message"])
     else:
-        flash("Only a pending application can be decided.")
-    cur.close(); conn.close()
+        flash(res["message"])
     return redirect(url_for("admin_view", app_id=app_id))
 
 
@@ -670,9 +794,132 @@ def admin_reject(app_id):
     return _admin_decide(app_id, "REJECTED", request.form.get("note", ""))
 
 
+# ---------------------------------------------------------------------------
+# Agent channel public upload routes
+# ---------------------------------------------------------------------------
+
+@app.route("/agent/upload/<token>", methods=["GET", "POST"])
+def agent_upload(token):
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT mobile, expires_at, used_at FROM agent_upload_tokens WHERE token_hash = %s",
+        (token_hash,)
+    )
+    row = cur.fetchone()
+
+    template_upload = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sewa Setu - Age Proof Upload</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; background: #f0f2f5; color: #222; }
+.header { background: #0b3d6e; color: #fff; padding: 16px 24px; }
+.header h1 { margin: 0; font-size: 20px; }
+.card { max-width: 480px; margin: 24px auto; background: #fff; padding: 24px; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
+.title { font-size: 20px; font-weight: bold; margin-bottom: 8px; color: #0b3d6e; }
+.desc { font-size: 15px; color: #555; line-height: 1.5; margin-bottom: 20px; }
+.file-box { border: 2px dashed #0b3d6e; border-radius: 8px; padding: 24px; text-align: center; background: #f8fafc; margin-bottom: 20px; }
+.file-box input[type=file] { font-size: 16px; width: 100%; }
+.btn { display: block; width: 100%; background: #0b3d6e; color: #fff; border: none; padding: 14px; font-size: 17px; font-weight: bold; border-radius: 6px; cursor: pointer; box-sizing: border-box; }
+.btn:hover { background: #092c4f; }
+.err-box { background: #fde8e8; border-left: 4px solid #e02424; padding: 14px; border-radius: 4px; color: #9b1c1c; font-size: 15px; margin-bottom: 16px; }
+.ok-box { background: #def7ec; border-left: 4px solid #0e9f6e; padding: 16px; border-radius: 4px; color: #03543f; font-size: 16px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div class="header"><h1>Sewa Setu &mdash; Document Upload</h1></div>
+<div class="card">
+{% if error %}
+  <div class="err-box">{{ error }}</div>
+{% endif %}
+{% if success %}
+  <div class="ok-box">
+    <strong>Upload successful!</strong><br>
+    Your age proof document has been attached to your application draft. You can now return to your assistant.
+  </div>
+{% else %}
+  <div class="title">Upload Age Proof Document</div>
+  <div class="desc">Please upload a clear photo or PDF of your age proof (JPG, PNG, or PDF up to 5 MB).</div>
+  <form method="post" enctype="multipart/form-data">
+    <div class="file-box">
+      <input type="file" name="document" accept=".pdf,.jpg,.jpeg,.png" required>
+    </div>
+    <button type="submit" class="btn">Upload Document</button>
+  </form>
+{% endif %}
+</div>
+</body>
+</html>"""
+
+    if not row:
+        cur.close(); conn.close()
+        return render_template_string(template_upload, error="This upload link is invalid or does not exist. Please ask your assistant for a new link.", success=False), 400
+
+    mobile, expires_at, used_at = row
+    if used_at is not None:
+        cur.close(); conn.close()
+        return render_template_string(template_upload, error="This upload link has already been used. Please ask your assistant for a new link if you need to upload again.", success=False), 400
+
+    if datetime.now() > expires_at:
+        cur.close(); conn.close()
+        return render_template_string(template_upload, error="This upload link has expired (links are valid for 30 minutes). Please ask your assistant for a fresh link.", success=False), 400
+
+    if request.method == "POST":
+        f = request.files.get("document")
+        if f is None or f.filename == "":
+            cur.close(); conn.close()
+            return render_template_string(template_upload, error="Please select a file to upload.", success=False), 400
+
+        orig_filename = f.filename.lower()
+        ext = orig_filename.rsplit(".", 1)[-1] if "." in orig_filename else ""
+        if ext not in ("pdf", "jpg", "jpeg", "png"):
+            cur.close(); conn.close()
+            return render_template_string(template_upload, error="Only JPG, JPEG, PNG, or PDF files are accepted.", success=False), 400
+
+        content = f.read()
+        if len(content) > 5 * 1024 * 1024:
+            cur.close(); conn.close()
+            return render_template_string(template_upload, error="The file size exceeds the 5 MB limit. Please choose a smaller file.", success=False), 400
+
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
+        safe_name = secure_filename(f.filename) or ("proof." + ext)
+        save_filename = "%s_%s" % (mobile, safe_name)
+        save_path = os.path.join(UPLOAD_DIR, save_filename)
+        with open(save_path, "wb") as fh:
+            fh.write(content)
+
+        # Mark token used
+        cur.execute(
+            "UPDATE agent_upload_tokens SET used_at = %s WHERE token_hash = %s",
+            (datetime.now(), token_hash)
+        )
+        # Update agent_drafts
+        cur.execute(
+            """INSERT INTO agent_drafts (mobile, data, doc_path, updated_at)
+               VALUES (%s, '{}', %s, %s)
+               ON CONFLICT (mobile) DO UPDATE
+               SET doc_path = EXCLUDED.doc_path, updated_at = EXCLUDED.updated_at""",
+            (mobile, save_path, datetime.now())
+        )
+        conn.commit()
+        cur.close(); conn.close()
+        return render_template_string(template_upload, error=None, success=True)
+
+    cur.close(); conn.close()
+    return render_template_string(template_upload, error=None, success=False)
+
+
 from oauth import oauth as _oauth_blueprint   # noqa: E402  (needs the definitions above)
 app.register_blueprint(_oauth_blueprint)
+
+from agent_api import agent_api as _agent_api_blueprint   # noqa: E402
+app.register_blueprint(_agent_api_blueprint, url_prefix="/internal/agent")
 
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000, debug=False)
+

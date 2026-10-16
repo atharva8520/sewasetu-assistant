@@ -20,6 +20,8 @@ services:
       # the address at which people reach this portal; stamped into sign-in tokens and
       # discovery documents, so it must be the public one when deployed
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8000}
+      AGENT_INTERNAL_KEY: ${AGENT_INTERNAL_KEY:-dev-agent-key-sewasetu-2026}
+      AGENT_ENABLED_BLOCKS: ${AGENT_ENABLED_BLOCKS:-Sonari}
     depends_on:
       - db
       - smsgw

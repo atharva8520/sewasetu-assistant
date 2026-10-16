@@ -20,7 +20,9 @@ CREATE TABLE IF NOT EXISTS applications (
     status          VARCHAR(20) DEFAULT 'PENDING',
     submitted_at    TIMESTAMP,
     decided_at      TIMESTAMP,
-    decided_by      VARCHAR(50)
+    decided_by      VARCHAR(50),
+    channel         VARCHAR(20) DEFAULT 'web',
+    channel_client  VARCHAR(100)
 );
 
 -- Status portal accounts (created at submission time)
@@ -108,4 +110,33 @@ CREATE TABLE IF NOT EXISTS oauth_program_tokens (     -- admin-issued, long-live
     created_at TIMESTAMP,
     expires_at TIMESTAMP,
     revoked_at TIMESTAMP
+);
+
+-- Agent API tables
+CREATE TABLE IF NOT EXISTS agent_drafts (
+    mobile VARCHAR(15) PRIMARY KEY,
+    data JSONB,
+    doc_path VARCHAR(200),
+    updated_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS agent_upload_tokens (
+    token_hash VARCHAR(64) PRIMARY KEY,
+    mobile VARCHAR(15),
+    expires_at TIMESTAMP,
+    used_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS agent_reviews (
+    mobile VARCHAR(15) PRIMARY KEY,
+    review_hash VARCHAR(64),
+    review_code_hash VARCHAR(64),
+    created_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS agent_case_views (
+    id SERIAL PRIMARY KEY,
+    officer VARCHAR(100),
+    application_id INTEGER,
+    viewed_at TIMESTAMP
 );
