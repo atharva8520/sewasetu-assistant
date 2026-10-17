@@ -1,0 +1,69 @@
+services:
+  db:
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sewasetu_staging}
+      POSTGRES_USER: ${POSTGRES_USER:-sewasetu}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sewasetu123}
+    volumes:
+      - staging_pgdata:/var/lib/postgresql/data
+      - ./app/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./seed/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql
+
+  app:
+    ports: !reset []
+    environment:
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-staging-admin-pass-2026}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8081}
+      AGENT_INTERNAL_KEY: ${AGENT_INTERNAL_KEY:-staging-agent-key-sewasetu-2026}
+      SECRET_KEY: ${SECRET_KEY:-staging-secret-key-sewasetu-2026}
+      AGENT_ENABLED_BLOCKS: ${AGENT_ENABLED_BLOCKS:-Sonari}
+      POSTGRES_DB: ${POSTGRES_DB:-sewasetu_staging}
+      POSTGRES_USER: ${POSTGRES_USER:-sewasetu}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sewasetu123}
+    volumes:
+      - staging_uploads:/var/sewasetu/uploads
+      - staging_applogs:/var/log/sewasetu
+
+  proxy:
+    ports: !override
+      - "8081:80"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - staging_caddy_data:/data
+      - staging_caddy_config:/config
+
+  mcp-citizen:
+    ports: !reset []
+    environment:
+      PORTAL_INTERNAL_URL: http://app:8000
+      AGENT_INTERNAL_KEY: ${AGENT_INTERNAL_KEY:-staging-agent-key-sewasetu-2026}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8081}
+      ROLE: citizen
+      PORT: 9001
+
+  mcp-officer:
+    ports: !reset []
+    environment:
+      PORTAL_INTERNAL_URL: http://app:8000
+      AGENT_INTERNAL_KEY: ${AGENT_INTERNAL_KEY:-staging-agent-key-sewasetu-2026}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8081}
+      ROLE: officer
+      PORT: 9002
+
+  scheduler:
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sewasetu_staging}
+      POSTGRES_USER: ${POSTGRES_USER:-sewasetu}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sewasetu123}
+    volumes:
+      - staging_applogs:/var/log/sewasetu
+
+volumes:
+  staging_pgdata:
+  staging_uploads:
+  staging_applogs:
+  staging_caddy_data:
+  staging_caddy_config:

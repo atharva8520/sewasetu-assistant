@@ -30,11 +30,11 @@ SMS_GATEWAY_URL = config.get("app", "sms_gateway_url")
 
 def main():
     conn = psycopg2.connect(
-        host=config.get("database", "host"),
-        port=config.get("database", "port"),
-        dbname=config.get("database", "name"),
-        user=config.get("database", "user"),
-        password=config.get("database", "password"),
+        host=os.environ.get("POSTGRES_HOST") or config.get("database", "host"),
+        port=os.environ.get("POSTGRES_PORT") or config.get("database", "port"),
+        dbname=os.environ.get("POSTGRES_DB") or config.get("database", "name"),
+        user=os.environ.get("POSTGRES_USER") or config.get("database", "user"),
+        password=os.environ.get("POSTGRES_PASSWORD") or config.get("database", "password"),
     )
     cur = conn.cursor()
     cutoff = datetime.now() - timedelta(days=SLA_DAYS)
