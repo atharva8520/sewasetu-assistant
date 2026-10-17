@@ -28,7 +28,7 @@ import json
 import requests
 import psycopg2
 from flask import (Flask, request, session, redirect, url_for, render_template,
-                   render_template_string, flash, send_file, abort)
+                   render_template_string, flash, send_file, abort, jsonify)
 from werkzeug.utils import secure_filename
 from werkzeug.middleware.proxy_fix import ProxyFix
 from fpdf import FPDF
@@ -318,6 +318,11 @@ def submit_application_for(mobile, data, doc_path, channel="web", client_name=No
 # ---------------------------------------------------------------------------
 # Public pages
 # ---------------------------------------------------------------------------
+
+@app.route("/healthz", methods=["GET"])
+def healthz():
+    return jsonify({"status": "ok"}), 200
+
 
 @app.route("/")
 def index():
