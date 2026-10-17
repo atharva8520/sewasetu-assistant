@@ -951,3 +951,61 @@ def get_officer_summary():
         "overdue": overdue,
         "near_deemed_approval": near_deemed
     })
+
+
+@agent_api.route("/my-decisions", methods=["GET"])
+def get_my_decisions():
+    officer_name, client_name = require_officer()
+    try:
+        limit = min(max(int(request.args.get("limit", 20)), 1), 100)
+    except (TypeError, ValueError):
+        limit = 20
+    conn = portal.get_db()
+    cur = conn.cursor()
+    cur.execute(
+        """SELECT a.application_no, a.applicant_name, a.block, a.status,
+                  a.decided_at, a.decided_by, l.note
+           FROM applications a
+           LEFT JOIN LATERAL (
+               SELECT note FROM audit_log
+               WHERE application_id = a.id AND action IN ('APPROVED', 'REJECTED')
+               ORDER BY at DESC LIMIT 1
+           ) l ON TRUE
+           WHERE a.status IN ('APPROVED', 'REJECTED')
+           ORDER BY a.decided_at DESC NULLS LAST
+           LIMIT %s""",
+        (limit,)
+    )
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    items = []
+    for r in rows:
+        items.append({
+            "application_no": r[0],
+            "applicant_name": r[1],
+            "block": r[2],
+            "decision": r[3],
+            "decided_at": r[4].isoformat() if r[4] else None,
+            "decided_by": r[5],
+            "reason": r[6] or ""
+        })
+    return jsonify({"items": items, "count": len(items)})
+
+
+@agent_api.route("/program-token-live", methods=["GET"])
+def check_program_token_live():
+    jti = request.args.get("jti", "").strip()
+    if not jti:
+        return jsonify({"live": False, "error": "Missing jti parameter"}), 400
+    conn = portal.get_db()
+    cur = conn.cursor()
+    cur.execute(
+        """SELECT 1 FROM oauth_program_tokens
+           WHERE jti = %s AND revoked_at IS NULL AND expires_at > %s
+           LIMIT 1""",
+        (jti, datetime.now())
+    )
+    row = cur.fetchone()
+    cur.close(); conn.close()
+    return jsonify({"live": bool(row)})
+

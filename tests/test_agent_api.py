@@ -19,6 +19,8 @@ BASE_URL = os.environ.get("BASE_URL", "http://localhost:8080")
 INTERNAL_BASE_URL = os.environ.get("INTERNAL_BASE_URL", "http://localhost:8000" if ":8080" in BASE_URL else BASE_URL)
 INTERNAL_KEY = os.environ.get("AGENT_INTERNAL_KEY", "dev-agent-key-sewasetu-2026")
 INTERNAL_HEADERS = {"X-Internal-Key": INTERNAL_KEY}
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "change-me-before-deploying")
 
 
 def get_sms_otp(mobile, max_wait=10):
@@ -299,7 +301,7 @@ def test_agent_application_in_admin():
 
     # 5. Check in /admin
     s_admin = requests.Session()
-    s_admin.post(f"{BASE_URL}/admin", data={"username": "admin", "password": "devpass"})
+    s_admin.post(f"{BASE_URL}/admin", data={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD})
 
     r_view = s_admin.get(f"{BASE_URL}/admin/application/{app_id}")
     assert r_view.status_code == 200

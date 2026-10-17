@@ -17,3 +17,12 @@ services:
 
   smsgw:
     restart: unless-stopped
+
+  mcp-citizen:
+    restart: unless-stopped
+    ports: !reset []
+
+  mcp-officer:
+    restart: unless-stopped
+    ports: !reset []
+

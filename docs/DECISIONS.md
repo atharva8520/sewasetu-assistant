@@ -130,3 +130,20 @@ The portal provides an internal endpoint `GET /internal/agent/session-live?sub=&
 2. The MCP resource servers query this endpoint and cache the result for up to 5 seconds.
 3. If the session is no longer live, the assistant returns HTTP 401 with `WWW-Authenticate`, terminating access immediately upon revocation and ensuring kiosk safety.
 
+---
+
+## mcp-sdk-findings-and-server-architecture
+
+### Context
+Phase 4 builds two independent MCP servers (citizen and officer) matching Caddy reverse proxy routes.
+
+### Findings & Architecture Decision
+1. **SDK Pinning & FastMCP Migration:** Pinned to official `mcp==2.3.0` and `mcp-types==2.3.0`. In SDK v2.x, `FastMCP` is replaced by `mcp.server.mcpserver.MCPServer`.
+2. **Streamable HTTP & Custom Path:** `server.streamable_http_app(streamable_http_path="/mcp/<role>", stateless_http=True, json_response=True)` mounts the MCP endpoint at exactly `/mcp/citizen` or `/mcp/officer`.
+3. **Stateless & JSON Responses:** `stateless_http=True` avoids session state so restarts never strand clients; `json_response=True` serves JSON where supported.
+4. **OAuth Resource Server & RFC 9728:** Initializing `MCPServer(auth=AuthSettings(issuer_url=..., resource_server_url=..., required_scopes=...), token_verifier=...)` automatically exposes RFC 9728 metadata at `/.well-known/oauth-protected-resource/mcp/<role>` and emits `WWW-Authenticate: Bearer ... resource_metadata="..."` on 401.
+5. **Transport Security & Allowed Hosts:** Pass `TransportSecuritySettings(enable_dns_rebinding_protection=False)` or explicit allowed hosts to prevent DNS rebinding rejections behind reverse proxies.
+6. **Unauthenticated Health Endpoint:** Registered at `GET /healthz` via `@server.custom_route("/healthz", methods=["GET"])`.
+7. **Claude Code CLI & Official Client Compatibility:** Verified via official Python `mcp` SDK client over Streamable HTTP proxy (`ClientSession` + `streamable_http_client` covering all citizen and officer tools in `tests/test_mcp_auth.py`). Claude Code CLI binary (`claude`) is not installed in this host environment, but endpoints strictly adhere to standard MCP Streamable HTTP specifications.
+
+

@@ -1,0 +1,14 @@
+# Pinned requirements for Sewa Setu MCP Servers (official MCP Python SDK v2.3)
+mcp==2.3.0
+mcp-types==2.3.0
+httpx2==2.13.1
+httpcore2==2.13.1
+httpx==0.28.1
+starlette==1.7.0
+uvicorn==0.54.0
+pyjwt==2.15.0
+cryptography==49.0.0
+pydantic==2.13.4
+pydantic-core==2.46.4
+anyio==4.12.1
+sse-starlette==3.5.0

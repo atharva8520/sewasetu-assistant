@@ -41,6 +41,51 @@ services:
       - caddy_config:/config
     depends_on:
       - app
+      - mcp-citizen
+      - mcp-officer
+
+  mcp-citizen:
+    build:
+      context: .
+      dockerfile: citizen/Dockerfile
+    environment:
+      PORTAL_INTERNAL_URL: http://app:8000
+      AGENT_INTERNAL_KEY: ${AGENT_INTERNAL_KEY:-dev-agent-key-sewasetu-2026}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
+      ROLE: citizen
+      PORT: 9001
+    ports:
+      - "9001:9001"
+    restart: unless-stopped
+    depends_on:
+      - app
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:9001/healthz')\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  mcp-officer:
+    build:
+      context: .
+      dockerfile: officer/Dockerfile
+    environment:
+      PORTAL_INTERNAL_URL: http://app:8000
+      AGENT_INTERNAL_KEY: ${AGENT_INTERNAL_KEY:-dev-agent-key-sewasetu-2026}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
+      ROLE: officer
+      PORT: 9002
+    ports:
+      - "9002:9002"
+    restart: unless-stopped
+    depends_on:
+      - app
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:9002/healthz')\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
 
   scheduler:
     build: ./app
